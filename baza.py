@@ -1,421 +1,185 @@
 import csv
 
-class Tabela:
+def pobrisi_tabele(conn):
     """
-    Razred, ki predstavlja tabelo v bazi.
-    Polja razreda:
-    - ime: ime tabele
-    - podatki: datoteka s podatki ali None
-    - id: stolpec z lastnostjo AUTOINCREMENT ali None
+    Pobriše tabele iz baze.
     """
-    ime = None
-    podatki = None
-    id = None
+    conn.execute("DROP TABLE IF EXISTS karta;")
+    conn.execute("DROP TABLE IF EXISTS postaja;")
+    conn.execute("DROP TABLE IF EXISTS proga;")
+    conn.execute("DROP TABLE IF EXISTS vlak;")
+    conn.execute("DROP TABLE IF EXISTS dan;")
+    conn.execute("DROP TABLE IF EXISTS vmesne_postaje;")
 
-    def __init__(self, conn):
-        """
-        Konstruktor razreda.
-        """
-        self.conn = conn
-
-    def ustvari(self):
-        """
-        Metoda za ustvarjanje tabele.
-        Podrazredi morajo povoziti to metodo.
-        """
-        raise NotImplementedError
-
-    def izbrisi(self):
-        """
-        Metoda za brisanje tabele.
-        """
-        self.conn.execute("DROP TABLE IF EXISTS {};".format(self.ime))
-
-    def uvozi(self, encoding="UTF-8", **kwargs):
-        """
-        Metoda za uvoz podatkov.
-        Argumenti:
-        - encoding: kodiranje znakov
-        - ostali poimenovani argumenti: za metodo dodaj_vrstico
-        """
-        if self.podatki is None:
-            return
-        with open(self.podatki, encoding=encoding) as datoteka:
-            podatki = csv.reader(datoteka)
-            stolpci = self.pretvori(next(podatki), kwargs)
-            poizvedba = self.dodajanje(stolpci)
-            for vrstica in podatki:
-                vrstica = [None if x == "" else x for x in vrstica]
-                self.dodaj_vrstico(vrstica, poizvedba, **kwargs)
-
-    def izprazni(self):
-        """
-        Metodo za praznjenje tabele.
-        """
-        self.conn.execute("DELETE FROM {};".format(self.ime))
-
-    @staticmethod
-    def pretvori(stolpci, kwargs):
-        """
-        Prilagodi imena stolpcev
-        in poskrbi za ustrezne argumente za dodaj_vrstico.
-        Privzeto vrne podane stolpce.
-        """
-        return stolpci
-
-    def dodajanje(self, stolpci=None, stevilo=None):
-        """
-        Metoda za gradnjo poizvedbe.
-        Arugmenti uporabimo enega od njiju):
-        - stolpci: seznam stolpcev
-        - stevilo: število stolpcev
-        """
-        if stolpci is None:
-            assert stevilo is not None
-            st = ""
-        else:
-            st = " ({})".format(", ".join(stolpci))
-            stevilo = len(stolpci)
-        return "INSERT INTO {}{} VALUES ({})". \
-            format(self.ime, st, ", ".join(["?"] * stevilo))
-
-    def dodaj_vrstico(self, podatki, poizvedba=None, **kwargs):
-        """
-        Metoda za dodajanje vrstice.
-        Argumenti:
-        - podatki: seznam s podatki v vrstici
-        - poizvedba: poizvedba, ki naj se zažene
-        - poljubni poimenovani parametri: privzeto se ignorirajo
-        """
-        if poizvedba is None:
-            poizvedba = self.dodajanje(stevilo=len(podatki))
-        cur = self.conn.execute(poizvedba, podatki)
-        if self.id is not None:
-            return cur.lastrowid
-
-
-class Vlak(Tabela):
+def ustvari_tabele(conn):
     """
-    Tabela za vlake.
+    Ustvari tabele v bazi.
     """
-    ime = "vlak"
-    id = "id"
+    conn.execute("""
+        CREATE TABLE karta (
+            datum DATE REFERENCES dan (datum),
+            tip   TEXT,-- dvosmerna, enosmerna
+            od    INT  REFERENCES postaja (id),
+            kam   INT  REFERENCES postaja (id) 
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE postaja (
+        id  INT  PRIMARY KEY,
+        ime TEXT
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE proga (
+            šifra           INT  PRIMARY KEY,
+            tip             TEXT,-- intercity, mednarodni, potniški ipd verjetno xDD1
+            zacetna_postaja INT  REFERENCES postaja (id),
+            koncna_postaja  INT  REFERENCES postaja (id),
+            ura_prihoda     TIME,
+            ura_odhoda      TIME
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE vlak (
+            reg     TEXT PRIMARY KEY,
+            vozi_na INT  REFERENCES proga (šifra) --,
+            -- od      INT  REFERENCES postaja (id),
+            -- kam     INT  REFERENCES postaja (id) 
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE dan (
+            datum DATE PRIMARY KEY,
+            vlak       REFERENCES vlak (reg),
+            proga      REFERENCES proga (šifra) 
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE vmesne_postaje (
+        vedno      TEXT,
+        id_postaje INT  REFERENCES postaja (id),
+        id_proge   INT  REFERENCES proga (id) 
+    );
+    """)
 
-    def ustvari(self):
-        """
-        Ustvari tabelo vlak.
-        """
-        self.conn.execute("""
-            CREATE TABLE vlak (
-                id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                registerska TEXT UNIQUE
-            );
-        """)
-
-    def dodaj_vrstico(self, podatki, poizvedba=None):
-        """
-        Dodaj vlak.
-        Če vlak že obstaja, vrne obstoječ ID.
-        """
-        cur = self.conn.execute("""
-            SELECT id FROM vlak
-            WHERE registerska = ?;
-        """, podatki)
-        r = cur.fetchone()
-        if r is None:
-            return super().dodaj_vrstico(podatki, poizvedba)
-        else:
-            id, = r
-            return id
-
-
-class Oseba(Tabela):
+def uvozi_karta(conn):
     """
-    Tabela za osebe.
+    Uvozi podatke o kartah.
     """
-    ime = "oseba"
-    podatki = "podatki/oseba.csv"
+    conn.execute("DELETE FROM karta;")
 
-    def ustvari(self):
-        """
-        Ustvari tabelo oseba.
-        """
-        self.conn.execute("""
-            CREATE TABLE oseba (
-                id  INTEGER PRIMARY KEY,
-                ime TEXT
-                priimek TEXT
-            );
-        """)
+    with open('Podatki/karta.csv') as datoteka:
+        podatki = csv.reader(datoteka)
+        stolpci = next(podatki)
+        poizvedba = """
+            INSERT INTO igralci VALUES ({})
+        """.format(', '.join(["?"] * len(stolpci)))
+        for vrstica in podatki:
+            conn.execute(poizvedba, vrstica)
 
-
-class Proga(Tabela):
+def uvozi_postaja(conn):
     """
-    Tabela za proge.
+    Uvozi podatke o postajah.
     """
-    ime = "proga"
-    podatki = "podatki/proga.csv"
+    conn.execute("DELETE FROM proga;")
+    conn.execute("DELETE FROM karta;")
+    conn.execute("DELETE FROM vmesne_postaje;")
+    conn.execute("DELETE FROM vlak;")
+    conn.execute("DELETE FROM postaja;")
 
-    def ustvari(self):
-        """
-        Ustvari tabelo proga.
-        """
-        self.conn.execute("""
-            CREATE TABLE proga (
-                id  INTEGER PRIMARY KEY,
-                ime TEXT
-            );
-        """)
+    with open('Podatki/postaja.csv') as datoteka:
+        podatki = csv.reader(datoteka)
+        stolpci = next(podatki)
+        poizvedba = """
+            INSERT INTO igralci VALUES ({})
+        """.format(', '.join(["?"] * len(stolpci)))
+        for vrstica in podatki:
+            conn.execute(poizvedba, vrstica)
 
-class Postaja(Tabela):
+def uvozi_proga(conn):
     """
-    Tabela za postaje.
+    Uvozi podatke o progah.
     """
-    ime = "postaja"
-    podatki = "podatki/postaja.csv"
+    conn.execute("DELETE FROM vlak;")
+    conn.execute("DELETE FROM dan;")
+    conn.execute("DELETE FROM vmesne_postaje;")
+    conn.execute("DELETE FROM proga;")
 
-    def ustvari(self):
-        """
-        Ustvari tabelo postaja.
-        """
-        self.conn.execute("""
-            CREATE TABLE postaja (
-                id  INTEGER PRIMARY KEY,
-                ime TEXT
-            );
-        """)
+    with open('Podatki/proga.csv') as datoteka:
+        podatki = csv.reader(datoteka)
+        stolpci = next(podatki)
+        poizvedba = """
+            INSERT INTO igralci VALUES ({})
+        """.format(', '.join(["?"] * len(stolpci)))
+        for vrstica in podatki:
+            conn.execute(poizvedba, vrstica)
 
-class Karta(Tabela):
+def uvozi_vlak(conn):
     """
-    Tabela za karte.
+    Uvozi podatke o vlakih.
     """
-    ime = "karta"
-    id = "id"
+    conn.execute("DELETE FROM dan;")
+    conn.execute("DELETE FROM vlak;")
 
-    def ustvari(self):
-        """
-        Ustvari tabelo karta.
-        """
-        self.conn.execute("""
-            CREATE TABLE karta (
-                id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                proga INTEGER NOT NULL,
-                datum DATE NOT NULL,
-                vstop INTEGER NOT NULL,
-                izstop INTEGER NOT NULL,
+    with open('Podatki/vlak.csv') as datoteka:
+        podatki = csv.reader(datoteka)
+        stolpci = next(podatki)
+        poizvedba = """
+            INSERT INTO igralci VALUES ({})
+        """.format(', '.join(["?"] * len(stolpci)))
+        for vrstica in podatki:
+            conn.execute(poizvedba, vrstica)
 
-            );
-        """)
-####
-#zbriši to, nad tem dodaj foreign key 
-#####
-    def dodaj_vrstico(self, podatki, poizvedba=None):
-        """
-        Dodaj vlak.
-        Če vlak že obstaja, vrne obstoječ ID.
-        """
-        cur = self.conn.execute("""
-            SELECT id FROM vlak
-            WHERE registerska = ?;
-        """, podatki)
-        r = cur.fetchone()
-        if r is None:
-            return super().dodaj_vrstico(podatki, poizvedba)
-        else:
-            id, = r
-            return id
-
-# konec sprememb
-
-
-
-    def uvozi(self, encoding="UTF-8"):
-        """
-        Uvozi podatke o filmih in pripadajoče oznake.
-        """
-        insert = self.oznaka.dodajanje(stevilo=1)
-        super().uvozi(encoding=encoding, insert=insert)
-
-    @staticmethod
-    def pretvori(stolpci, kwargs):
-        """
-        Zapomni si indeks stolpca z oznako.
-        """
-        kwargs["oznaka"] = stolpci.index("oznaka")
-        return stolpci
-
-    def dodaj_vrstico(self, podatki, poizvedba=None, insert=None, oznaka=None):
-        """
-        Dodaj film in pripadajočo oznako.
-        Argumenti:
-        - podatki: seznam s podatki o filmu
-        - poizvedba: poizvedba za dodajanje filma
-        - insert: poizvedba za dodajanje oznake
-        - oznaka: indeks stolpca z oznako
-        """
-        assert oznaka is not None
-        if insert is None:
-            insert = self.oznaka.dodajanje(1)
-        if podatki[oznaka] is not None:
-            self.oznaka.dodaj_vrstico([podatki[oznaka]], insert)
-        super().dodaj_vrstico(podatki, poizvedba)
-
-
-
-
-
-class Vloga(Tabela):
+def uvozi_dan(conn):
     """
-    Tabela za vloge.
+    Uvozi podatke o tem kateri vlak vozi po kateri progi v nekem dnevu.
     """
-    ime = "vloga"
-    podatki = "podatki/vloga.csv"
+    conn.execute("DELETE FROM karta;")
+    conn.execute("DELETE FROM dan;")
 
-    def ustvari(self):
-        """
-        Ustvari tabelo vloga.
-        """
-        self.conn.execute("""
-            CREATE TABLE vloga (
-                film  INTEGER   REFERENCES film (id),
-                oseba INTEGER   REFERENCES oseba (id),
-                tip   CHARACTER CHECK (tip IN ('I',
-                                'R') ),
-                mesto INTEGER,
-                PRIMARY KEY (
-                    film,
-                    oseba,
-                    tip
-                )
-            );
-        """)
+    with open('Podatki/dan.csv') as datoteka:
+        podatki = csv.reader(datoteka)
+        stolpci = next(podatki)
+        poizvedba = """
+            INSERT INTO igralci VALUES ({})
+        """.format(', '.join(["?"] * len(stolpci)))
+        for vrstica in podatki:
+            conn.execute(poizvedba, vrstica)
 
-
-class Pripada(Tabela):
+def uvozi_vmesne_postaje(conn):
     """
-    Tabela za relacijo pripadnosti filma žanru.
+    Uvozi podatke o tem kateri vlak vozi po kateri progi, v nekem dnevu.
     """
-    ime = "pripada"
-    podatki = "podatki/zanr.csv"
 
-    def __init__(self, conn, zanr):
-        """
-        Konstruktor tabele pripadnosti žanrom.
-        Argumenti:
-        - conn: povezava na bazo
-        - zanr: tabela za žanre
-        """
-        super().__init__(conn)
-        self.zanr = zanr
+    conn.execute("DELETE FROM vmesne_postaje;")
 
-    def ustvari(self):
-        """
-        Ustvari tabelo pripada.
-        """
-        self.conn.execute("""
-            CREATE TABLE pripada (
-                film INTEGER REFERENCES film (id),
-                zanr INTEGER REFERENCES zanr (id),
-                PRIMARY KEY (
-                    film,
-                    zanr
-                )
-            );
-        """)
-
-    def uvozi(self, encoding="UTF-8"):
-        """
-        Uvozi pripadnosti filmov in pripadajoe žanre.
-        """
-        insert = self.zanr.dodajanje(["naziv"])
-        super().uvozi(encoding=encoding, insert=insert)
-
-    @staticmethod
-    def pretvori(stolpci, kwargs):
-        """
-        Spremeni ime stolpca z žanrom
-        in si zapomni njegov indeks.
-        """
-        naziv = kwargs["naziv"] = stolpci.index("naziv")
-        stolpci[naziv] = "zanr"
-        return stolpci
-
-    def dodaj_vrstico(self, podatki, poizvedba=None, insert=None, naziv=None):
-        """
-        Dodaj pripadnost filma in pripadajoči žanr.
-        Argumenti:
-        - podatki: seznam s podatki o pripadnosti
-        - poizvedba: poizvedba za dodajanje pripadnosti
-        - insert: poizvedba za dodajanje žanra
-        - oznaka: indeks stolpca z žanrom
-        """
-        assert naziv is not None
-        if insert is None:
-            insert = self.zanr.dodajanje(["naziv"])
-        podatki[naziv] = self.zanr.dodaj_vrstico([podatki[naziv]], insert)
-        super().dodaj_vrstico(podatki, poizvedba)
-
-
-def ustvari_tabele(tabele):
-    """
-    Ustvari podane tabele.
-    """
-    for t in tabele:
-        t.ustvari()
-
-
-def izbrisi_tabele(tabele):
-    """
-    Izbriši podane tabele.
-    """
-    for t in tabele:
-        t.izbrisi()
-
-
-def uvozi_podatke(tabele):
-    """
-    Uvozi podatke v podane tabele.
-    """
-    for t in tabele:
-        t.uvozi()
-
-
-def izprazni_tabele(tabele):
-    """
-    Izprazni podane tabele.
-    """
-    for t in tabele:
-        t.izprazni()
-
+    with open('Podatki/vmesne_postaje.csv') as datoteka:
+        podatki = csv.reader(datoteka)
+        stolpci = next(podatki)
+        poizvedba = """
+            INSERT INTO igralci VALUES ({})
+        """.format(', '.join(["?"] * len(stolpci)))
+        for vrstica in podatki:
+            conn.execute(poizvedba, vrstica)
 
 def ustvari_bazo(conn):
     """
-    Izvede ustvarjanje baze.
+    Opravi celoten postopek postavitve baze.
     """
-    tabele = pripravi_tabele(conn)
-    izbrisi_tabele(tabele)
-    ustvari_tabele(tabele)
-    uvozi_podatke(tabele)
-
-
-def pripravi_tabele(conn):
-    """
-    Pripravi objekte za tabele.
-    """
-    zanr = Zanr(conn)
-    oznaka = Oznaka(conn)
-    film = Film(conn, oznaka)
-    oseba = Oseba(conn)
-    vloga = Vloga(conn)
-    pripada = Pripada(conn, zanr)
-    return [zanr, oznaka, film, oseba, vloga, pripada]
-
+    pobrisi_tabele(conn)
+    ustvari_tabele(conn)
+    uvozi_karta(conn)
+    uvozi_postaja(conn)
+    uvozi_proga(conn)
+    uvozi_vlak(conn)
+    uvozi_dan(conn)
+    uvozi_vmesne_postaje(conn)
 
 def ustvari_bazo_ce_ne_obstaja(conn):
     """
     Ustvari bazo, če ta še ne obstaja.
     """
     with conn:
-        cur = conn.execute("SELECT COUNT(*) FROM sqlite_master")
-        if cur.fetchone() == (0, ):
+        conn = conn.execute("SELECT COUNT(*) FROM sqlite_master")
+        if conn.fetchone() == (0, ):
             ustvari_bazo(conn)
